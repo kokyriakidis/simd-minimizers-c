@@ -1,0 +1,15 @@
+[package]
+name = "simd-minimizers-c"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+libc = "0.2"
+simd-minimizers = "2.2.0"
+packed-seq = "4.3.0"
+
+[build-dependencies]
+cbindgen = "0.29.2"
