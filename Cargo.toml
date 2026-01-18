@@ -8,8 +8,8 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 libc = "0.2"
-simd-minimizers = "2.2.0"
-packed-seq = "4.3.0"
+simd-minimizers = { git = "https://github.com/rust-seq/simd-minimizers.git" }
+packed-seq = "4.4.1"
 
 [build-dependencies]
 cbindgen = "0.29.2"
