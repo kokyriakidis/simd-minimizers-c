@@ -6,8 +6,20 @@
 
 /// Opaque handle to the SIMD sketcher for computing minimizers and syncmers.
 ///
-/// The sketcher stores the k-mer size (k), window size (w), and an internal cache
+/// The sketcher stores the k-mer size (k), window/s-mer size (w), and an internal cache
 /// for SIMD computations. Create with `simd_sketcher_new` and free with `simd_sketcher_free`.
+///
+/// # Parameter meanings
+///
+/// **For minimizers:**
+/// - `k`: k-mer size (length of k-mers to extract)
+/// - `w`: window size (number of consecutive k-mers per window)
+/// - Density ≈ 2/(w+1)
+///
+/// **For syncmers:**
+/// - `k`: k-mer size (length of k-mers to extract)
+/// - `w`: s-mer size (length of sub-k-mers used for selection, must be < k)
+/// - Density ≈ 2/(k-w+1) for closed, 1/(k-w+1) for open
 struct SimdSketcher;
 
 /// A list of minimizer/syncmer positions (0-based indices into the sequence).
@@ -72,9 +84,21 @@ extern "C" {
 /// Creates a new SimdSketcher with the given parameters.
 ///
 /// # Parameters
-/// - `k`: k-mer size (length of the k-mers to extract, typically 15-31).
-/// - `w`: window size for minimizers (number of consecutive k-mers per window),
-///        or s-mer size for syncmers (size of sub-k-mer used for selection).
+///
+/// **For minimizers:**
+/// - `k`: k-mer size (length of k-mers to extract, typically 15-31)
+/// - `w`: window size (number of consecutive k-mers per window)
+/// - Density ≈ 2/(w+1)
+///
+/// **For syncmers:**
+/// - `k`: k-mer size (length of k-mers to extract)
+/// - `w`: s-mer size (size of sub-k-mers used for selection, must be < k)
+/// - Density ≈ 2/(k-w+1) for closed syncmers, 1/(k-w+1) for open syncmers
+/// - Smaller w (s-mer size) → lower density (sparser selection)
+///
+/// # Constraints for canonical syncmers
+/// - For canonical closed/open syncmers: k-mer size `k` must be odd
+/// - For open syncmers: window size `k - w + 1` must be odd
 ///
 /// # Returns
 /// A pointer to the new SimdSketcher, or null on allocation failure.
@@ -194,7 +218,9 @@ MinimizerResult minimizers(SimdSketcher *sketcher, const char *seq, size_t len);
 /// Must be freed with `free_syncmer_list` when no longer needed.
 ///
 /// # Constraints
-/// For canonical closed syncmers, `k + w - 1` must be odd.
+/// - `w` must be less than `k` (s-mer must be smaller than k-mer)
+/// - For canonical closed syncmers, the window size `k - w + 1` must be such that
+///   `w + (k - w + 1) - 1 = k` is the desired k-mer length (automatically satisfied)
 ///
 /// # Safety
 /// - `sketcher` must be a valid pointer or null (returns empty list if null).
@@ -222,7 +248,7 @@ SyncmerList canonical_syncmer_positions(SimdSketcher *sketcher, const char *seq,
 /// Must be freed with `free_syncmer_result` when no longer needed.
 ///
 /// # Constraints
-/// For canonical closed syncmers, `k + w - 1` must be odd.
+/// - `w` must be less than `k` (s-mer must be smaller than k-mer)
 ///
 /// # Safety
 /// - `sketcher` must be a valid pointer or null (returns empty result if null).
@@ -290,7 +316,8 @@ SyncmerResult syncmers(SimdSketcher *sketcher, const char *seq, size_t len);
 /// Must be freed with `free_syncmer_list` when no longer needed.
 ///
 /// # Constraints
-/// For open syncmers, `w` (the s-mer size) must be odd.
+/// - `w` must be less than `k` (s-mer must be smaller than k-mer)
+/// - For open syncmers, the window size `k - w + 1` must be odd
 ///
 /// # Safety
 /// - `sketcher` must be a valid pointer or null (returns empty list if null).
@@ -318,7 +345,8 @@ SyncmerList canonical_open_syncmer_positions(SimdSketcher *sketcher, const char 
 /// Must be freed with `free_syncmer_result` when no longer needed.
 ///
 /// # Constraints
-/// For open syncmers, `w` (the s-mer size) must be odd.
+/// - `w` must be less than `k` (s-mer must be smaller than k-mer)
+/// - For open syncmers, the window size `k - w + 1` must be odd
 ///
 /// # Safety
 /// - `sketcher` must be a valid pointer or null (returns empty result if null).
@@ -342,7 +370,8 @@ SyncmerResult canonical_open_syncmers(SimdSketcher *sketcher, const char *seq, s
 /// Must be freed with `free_syncmer_list` when no longer needed.
 ///
 /// # Constraints
-/// For open syncmers, `w` (the s-mer size) must be odd.
+/// - `w` must be less than `k` (s-mer must be smaller than k-mer)
+/// - For open syncmers, the window size `k - w + 1` must be odd
 ///
 /// # Safety
 /// - `sketcher` must be a valid pointer or null (returns empty list if null).
@@ -370,7 +399,8 @@ SyncmerList open_syncmer_positions(SimdSketcher *sketcher, const char *seq, size
 /// Must be freed with `free_syncmer_result` when no longer needed.
 ///
 /// # Constraints
-/// For open syncmers, `w` (the s-mer size) must be odd.
+/// - `w` must be less than `k` (s-mer must be smaller than k-mer)
+/// - For open syncmers, the window size `k - w + 1` must be odd
 ///
 /// # Safety
 /// - `sketcher` must be a valid pointer or null (returns empty result if null).

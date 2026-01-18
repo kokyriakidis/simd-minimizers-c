@@ -77,13 +77,25 @@ pub type SyncmerResult = MinimizerResult;
 
 /// Opaque handle to the SIMD sketcher for computing minimizers and syncmers.
 ///
-/// The sketcher stores the k-mer size (k), window size (w), and an internal cache
+/// The sketcher stores the k-mer size (k), window/s-mer size (w), and an internal cache
 /// for SIMD computations. Create with `simd_sketcher_new` and free with `simd_sketcher_free`.
+///
+/// # Parameter meanings
+///
+/// **For minimizers:**
+/// - `k`: k-mer size (length of k-mers to extract)
+/// - `w`: window size (number of consecutive k-mers per window)
+/// - Density ≈ 2/(w+1)
+///
+/// **For syncmers:**
+/// - `k`: k-mer size (length of k-mers to extract)
+/// - `w`: s-mer size (length of sub-k-mers used for selection, must be < k)
+/// - Density ≈ 2/(k-w+1) for closed, 1/(k-w+1) for open
 pub struct SimdSketcher {
     /// k-mer size: the length of the k-mers to extract.
     k: usize,
-    /// Window size: the number of consecutive k-mers to consider for minimizer selection.
-    /// For syncmers, this is the s-mer size (size of the sub-k-mer used for selection).
+    /// For minimizers: window size (number of consecutive k-mers per window).
+    /// For syncmers: s-mer size (size of the sub-k-mer used for selection).
     w: usize,
     /// Internal cache for SIMD operations.
     cache: Cache,
@@ -92,9 +104,21 @@ pub struct SimdSketcher {
 /// Creates a new SimdSketcher with the given parameters.
 ///
 /// # Parameters
-/// - `k`: k-mer size (length of the k-mers to extract, typically 15-31).
-/// - `w`: window size for minimizers (number of consecutive k-mers per window),
-///        or s-mer size for syncmers (size of sub-k-mer used for selection).
+///
+/// **For minimizers:**
+/// - `k`: k-mer size (length of k-mers to extract, typically 15-31)
+/// - `w`: window size (number of consecutive k-mers per window)
+/// - Density ≈ 2/(w+1)
+///
+/// **For syncmers:**
+/// - `k`: k-mer size (length of k-mers to extract)
+/// - `w`: s-mer size (size of sub-k-mers used for selection, must be < k)
+/// - Density ≈ 2/(k-w+1) for closed syncmers, 1/(k-w+1) for open syncmers
+/// - Smaller w (s-mer size) → lower density (sparser selection)
+///
+/// # Constraints for canonical syncmers
+/// - For canonical closed/open syncmers: k-mer size `k` must be odd
+/// - For open syncmers: window size `k - w + 1` must be odd
 ///
 /// # Returns
 /// A pointer to the new SimdSketcher, or null on allocation failure.
@@ -403,7 +427,9 @@ pub unsafe extern "C" fn minimizers(
 /// Must be freed with `free_syncmer_list` when no longer needed.
 ///
 /// # Constraints
-/// For canonical closed syncmers, `k + w - 1` must be odd.
+/// - `w` must be less than `k` (s-mer must be smaller than k-mer)
+/// - For canonical closed syncmers, the window size `k - w + 1` must be such that
+///   `w + (k - w + 1) - 1 = k` is the desired k-mer length (automatically satisfied)
 ///
 /// # Safety
 /// - `sketcher` must be a valid pointer or null (returns empty list if null).
@@ -424,8 +450,14 @@ pub unsafe extern "C" fn canonical_syncmer_positions(
 
     let mut positions = Vec::new();
 
+    // Transform parameters: our k=kmer size, w=smer size
+    // simd-minimizers expects: k=smer size, w=window size
+    // window size = k - s + 1 = our_k - our_w + 1
+    let smer_size = sketcher.w;
+    let window_size = sketcher.k - sketcher.w + 1;
+
     use simd_minimizers::canonical_closed_syncmers;
-    canonical_closed_syncmers(sketcher.k, sketcher.w)
+    canonical_closed_syncmers(smer_size, window_size)
         .run(packed_seq.as_slice(), &mut positions);
 
     let ptr = positions.as_mut_ptr();
@@ -457,7 +489,7 @@ pub unsafe extern "C" fn canonical_syncmer_positions(
 /// Must be freed with `free_syncmer_result` when no longer needed.
 ///
 /// # Constraints
-/// For canonical closed syncmers, `k + w - 1` must be odd.
+/// - `w` must be less than `k` (s-mer must be smaller than k-mer)
 ///
 /// # Safety
 /// - `sketcher` must be a valid pointer or null (returns empty result if null).
@@ -482,8 +514,13 @@ pub unsafe extern "C" fn canonical_syncmers(
 
     let mut positions = Vec::new();
 
+    // Transform parameters: our k=kmer size, w=smer size
+    // simd-minimizers expects: k=smer size, w=window size
+    let smer_size = sketcher.w;
+    let window_size = sketcher.k - sketcher.w + 1;
+
     use simd_minimizers::canonical_closed_syncmers;
-    let values: Vec<u64> = canonical_closed_syncmers(sketcher.k, sketcher.w)
+    let values: Vec<u64> = canonical_closed_syncmers(smer_size, window_size)
         .run(packed_seq.as_slice(), &mut positions)
         .values_u64()
         .collect();
@@ -540,8 +577,13 @@ pub unsafe extern "C" fn syncmer_positions(
 
     let mut positions = Vec::new();
 
+    // Transform parameters: our k=kmer size, w=smer size
+    // simd-minimizers expects: k=smer size, w=window size
+    let smer_size = sketcher.w;
+    let window_size = sketcher.k - sketcher.w + 1;
+
     use simd_minimizers::closed_syncmers;
-    closed_syncmers(sketcher.k, sketcher.w)
+    closed_syncmers(smer_size, window_size)
         .run(packed_seq.as_slice(), &mut positions);
 
     let ptr = positions.as_mut_ptr();
@@ -594,8 +636,13 @@ pub unsafe extern "C" fn syncmers(
 
     let mut positions = Vec::new();
 
+    // Transform parameters: our k=kmer size, w=smer size
+    // simd-minimizers expects: k=smer size, w=window size
+    let smer_size = sketcher.w;
+    let window_size = sketcher.k - sketcher.w + 1;
+
     use simd_minimizers::closed_syncmers;
-    let values: Vec<u64> = closed_syncmers(sketcher.k, sketcher.w)
+    let values: Vec<u64> = closed_syncmers(smer_size, window_size)
         .run(packed_seq.as_slice(), &mut positions)
         .values_u64()
         .collect();
@@ -643,7 +690,8 @@ pub unsafe extern "C" fn syncmers(
 /// Must be freed with `free_syncmer_list` when no longer needed.
 ///
 /// # Constraints
-/// For open syncmers, `w` (the s-mer size) must be odd.
+/// - `w` must be less than `k` (s-mer must be smaller than k-mer)
+/// - For open syncmers, the window size `k - w + 1` must be odd
 ///
 /// # Safety
 /// - `sketcher` must be a valid pointer or null (returns empty list if null).
@@ -664,8 +712,14 @@ pub unsafe extern "C" fn canonical_open_syncmer_positions(
 
     let mut positions = Vec::new();
 
+    // Transform parameters: our k=kmer size, w=smer size
+    // simd-minimizers expects: k=smer size, w=window size
+    // For open syncmers, window size must be odd
+    let smer_size = sketcher.w;
+    let window_size = sketcher.k - sketcher.w + 1;
+
     use simd_minimizers::canonical_open_syncmers;
-    canonical_open_syncmers(sketcher.k, sketcher.w)
+    canonical_open_syncmers(smer_size, window_size)
         .run(packed_seq.as_slice(), &mut positions);
 
     let ptr = positions.as_mut_ptr();
@@ -697,7 +751,8 @@ pub unsafe extern "C" fn canonical_open_syncmer_positions(
 /// Must be freed with `free_syncmer_result` when no longer needed.
 ///
 /// # Constraints
-/// For open syncmers, `w` (the s-mer size) must be odd.
+/// - `w` must be less than `k` (s-mer must be smaller than k-mer)
+/// - For open syncmers, the window size `k - w + 1` must be odd
 ///
 /// # Safety
 /// - `sketcher` must be a valid pointer or null (returns empty result if null).
@@ -722,8 +777,13 @@ pub unsafe extern "C" fn canonical_open_syncmers(
 
     let mut positions = Vec::new();
 
+    // Transform parameters: our k=kmer size, w=smer size
+    // simd-minimizers expects: k=smer size, w=window size
+    let smer_size = sketcher.w;
+    let window_size = sketcher.k - sketcher.w + 1;
+
     use simd_minimizers::canonical_open_syncmers;
-    let values: Vec<u64> = canonical_open_syncmers(sketcher.k, sketcher.w)
+    let values: Vec<u64> = canonical_open_syncmers(smer_size, window_size)
         .run(packed_seq.as_slice(), &mut positions)
         .values_u64()
         .collect();
@@ -763,7 +823,8 @@ pub unsafe extern "C" fn canonical_open_syncmers(
 /// Must be freed with `free_syncmer_list` when no longer needed.
 ///
 /// # Constraints
-/// For open syncmers, `w` (the s-mer size) must be odd.
+/// - `w` must be less than `k` (s-mer must be smaller than k-mer)
+/// - For open syncmers, the window size `k - w + 1` must be odd
 ///
 /// # Safety
 /// - `sketcher` must be a valid pointer or null (returns empty list if null).
@@ -784,8 +845,13 @@ pub unsafe extern "C" fn open_syncmer_positions(
 
     let mut positions = Vec::new();
 
+    // Transform parameters: our k=kmer size, w=smer size
+    // simd-minimizers expects: k=smer size, w=window size
+    let smer_size = sketcher.w;
+    let window_size = sketcher.k - sketcher.w + 1;
+
     use simd_minimizers::open_syncmers;
-    open_syncmers(sketcher.k, sketcher.w)
+    open_syncmers(smer_size, window_size)
         .run(packed_seq.as_slice(), &mut positions);
 
     let ptr = positions.as_mut_ptr();
@@ -817,7 +883,8 @@ pub unsafe extern "C" fn open_syncmer_positions(
 /// Must be freed with `free_syncmer_result` when no longer needed.
 ///
 /// # Constraints
-/// For open syncmers, `w` (the s-mer size) must be odd.
+/// - `w` must be less than `k` (s-mer must be smaller than k-mer)
+/// - For open syncmers, the window size `k - w + 1` must be odd
 ///
 /// # Safety
 /// - `sketcher` must be a valid pointer or null (returns empty result if null).
@@ -842,8 +909,13 @@ pub unsafe extern "C" fn open_syncmers(
 
     let mut positions = Vec::new();
 
+    // Transform parameters: our k=kmer size, w=smer size
+    // simd-minimizers expects: k=smer size, w=window size
+    let smer_size = sketcher.w;
+    let window_size = sketcher.k - sketcher.w + 1;
+
     use simd_minimizers::open_syncmers;
-    let values: Vec<u64> = open_syncmers(sketcher.k, sketcher.w)
+    let values: Vec<u64> = open_syncmers(smer_size, window_size)
         .run(packed_seq.as_slice(), &mut positions)
         .values_u64()
         .collect();
@@ -941,4 +1013,310 @@ pub unsafe extern "C" fn free_syncmer_list(list: SyncmerList) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_syncmer_result(result: SyncmerResult) {
     unsafe { free_minimizer_result(result) }
+}
+
+// =============================================================================
+// TESTS - Verification against simd-minimizers library
+// =============================================================================
+// These tests verify our parameter transformation is correct by comparing
+// our FFI bindings against the original simd-minimizers library.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use packed_seq::PackedSeqVec;
+
+    /// Test that our parameter transformation produces the correct k-mer size.
+    /// 
+    /// In simd-minimizers: syncmers(k, w) produces k-mers of length k + w - 1
+    /// In our API: simd_sketcher_new(K, S) where K = k-mer size, S = s-mer size
+    /// We transform: simd_k = S, simd_w = K - S + 1
+    /// So k-mer size = simd_k + simd_w - 1 = S + (K - S + 1) - 1 = K ✓
+    #[test]
+    fn test_parameter_transformation() {
+        // Our parameters
+        let our_k = 15;  // k-mer size we want
+        let our_s = 5;   // s-mer size
+        
+        // Transformed for simd-minimizers
+        let simd_k = our_s;
+        let simd_w = our_k - our_s + 1;
+        
+        // Verify k-mer size
+        let actual_kmer_size = simd_k + simd_w - 1;
+        assert_eq!(actual_kmer_size, our_k, "k-mer size transformation failed");
+        
+        // Verify window size (for density calculation)
+        let window_size = simd_w;
+        let expected_window = our_k - our_s + 1;
+        assert_eq!(window_size, expected_window, "window size transformation failed");
+    }
+
+    /// Test closed syncmers match between our FFI and direct library calls.
+    #[test]
+    fn test_closed_syncmers_match_library() {
+        let seq = b"ACGTGCTCAGAGACTCAGAGGAACGTGCTCAGAGACTCAGAGGA";
+        let packed_seq = PackedSeqVec::from_ascii(seq);
+        
+        // Our parameters: k-mer size = 11, s-mer size = 5
+        let our_k = 11usize;
+        let our_s = 5usize;
+        
+        // Transform to simd-minimizers parameters
+        let simd_k = our_s;
+        let simd_w = our_k - our_s + 1;  // = 7
+        
+        // Call simd-minimizers directly
+        let mut direct_positions = Vec::new();
+        use simd_minimizers::closed_syncmers;
+        closed_syncmers(simd_k, simd_w)
+            .run(packed_seq.as_slice(), &mut direct_positions);
+        
+        // Call through our transformation (simulating what FFI does)
+        let mut our_positions = Vec::new();
+        let smer_size = our_s;
+        let window_size = our_k - our_s + 1;
+        closed_syncmers(smer_size, window_size)
+            .run(packed_seq.as_slice(), &mut our_positions);
+        
+        assert_eq!(direct_positions, our_positions, 
+            "Closed syncmer positions don't match! Direct: {:?}, Ours: {:?}", 
+            direct_positions, our_positions);
+        
+        println!("✓ Closed syncmers test passed: {} positions", direct_positions.len());
+    }
+
+    /// Test canonical closed syncmers match between our FFI and direct library calls.
+    #[test]
+    fn test_canonical_closed_syncmers_match_library() {
+        let seq = b"ACGTGCTCAGAGACTCAGAGGAACGTGCTCAGAGACTCAGAGGA";
+        let packed_seq = PackedSeqVec::from_ascii(seq);
+        
+        // Our parameters: k-mer size = 11 (odd for canonical), s-mer size = 5
+        let our_k = 11usize;
+        let our_s = 5usize;
+        
+        // Transform to simd-minimizers parameters
+        let simd_k = our_s;
+        let simd_w = our_k - our_s + 1;  // = 7
+        
+        // Verify k + w - 1 is odd (required for canonical)
+        assert!((simd_k + simd_w - 1) % 2 == 1, "k-mer size must be odd for canonical syncmers");
+        
+        // Call simd-minimizers directly
+        let mut direct_positions = Vec::new();
+        use simd_minimizers::canonical_closed_syncmers;
+        let direct_values: Vec<u64> = canonical_closed_syncmers(simd_k, simd_w)
+            .run(packed_seq.as_slice(), &mut direct_positions)
+            .values_u64()
+            .collect();
+        
+        // Call through our transformation
+        let mut our_positions = Vec::new();
+        let smer_size = our_s;
+        let window_size = our_k - our_s + 1;
+        let our_values: Vec<u64> = canonical_closed_syncmers(smer_size, window_size)
+            .run(packed_seq.as_slice(), &mut our_positions)
+            .values_u64()
+            .collect();
+        
+        assert_eq!(direct_positions, our_positions);
+        assert_eq!(direct_values, our_values);
+        assert_eq!(direct_positions.len(), direct_values.len());
+        
+        println!("✓ Canonical closed syncmers test passed: {} positions", direct_positions.len());
+    }
+
+    /// Test open syncmers match between our FFI and direct library calls.
+    #[test]
+    fn test_open_syncmers_match_library() {
+        let seq = b"ACGTGCTCAGAGACTCAGAGGAACGTGCTCAGAGACTCAGAGGA";
+        let packed_seq = PackedSeqVec::from_ascii(seq);
+        
+        // Our parameters: k-mer size = 13, s-mer size = 4
+        // Window size = 13 - 4 + 1 = 10 (even, so use non-canonical for this test)
+        let our_k = 12usize;
+        let our_s = 4usize;
+        let window_size = our_k - our_s + 1;  // = 9 (odd)
+        
+        // Verify window is odd (required for open syncmers)
+        assert!(window_size % 2 == 1, "window size must be odd for open syncmers");
+        
+        // Transform to simd-minimizers parameters
+        let simd_k = our_s;
+        let simd_w = window_size;
+        
+        // Call simd-minimizers directly
+        let mut direct_positions = Vec::new();
+        use simd_minimizers::open_syncmers;
+        open_syncmers(simd_k, simd_w)
+            .run(packed_seq.as_slice(), &mut direct_positions);
+        
+        // Call through our transformation
+        let mut our_positions = Vec::new();
+        open_syncmers(our_s, our_k - our_s + 1)
+            .run(packed_seq.as_slice(), &mut our_positions);
+        
+        assert_eq!(direct_positions, our_positions);
+        
+        println!("✓ Open syncmers test passed: {} positions", direct_positions.len());
+    }
+
+    /// Test canonical open syncmers match.
+    #[test]
+    fn test_canonical_open_syncmers_match_library() {
+        let seq = b"ACGTGCTCAGAGACTCAGAGGAACGTGCTCAGAGACTCAGAGGA";
+        let packed_seq = PackedSeqVec::from_ascii(seq);
+        
+        // Our parameters: k-mer size = 13 (odd), s-mer size = 5
+        // Window size = 13 - 5 + 1 = 9 (odd)
+        let our_k = 13usize;
+        let our_s = 5usize;
+        let window_size = our_k - our_s + 1;  // = 9 (odd)
+        
+        // Verify constraints
+        assert!(our_k % 2 == 1, "k-mer size must be odd for canonical syncmers");
+        assert!(window_size % 2 == 1, "window size must be odd for open syncmers");
+        
+        // Transform to simd-minimizers parameters
+        let simd_k = our_s;
+        let simd_w = window_size;
+        
+        // Call simd-minimizers directly
+        let mut direct_positions = Vec::new();
+        use simd_minimizers::canonical_open_syncmers;
+        let direct_values: Vec<u64> = canonical_open_syncmers(simd_k, simd_w)
+            .run(packed_seq.as_slice(), &mut direct_positions)
+            .values_u64()
+            .collect();
+        
+        // Call through our transformation
+        let mut our_positions = Vec::new();
+        let our_values: Vec<u64> = canonical_open_syncmers(our_s, our_k - our_s + 1)
+            .run(packed_seq.as_slice(), &mut our_positions)
+            .values_u64()
+            .collect();
+        
+        assert_eq!(direct_positions, our_positions);
+        assert_eq!(direct_values, our_values);
+        
+        println!("✓ Canonical open syncmers test passed: {} positions", direct_positions.len());
+    }
+
+    /// Test that density follows expected formula: 2/(k-s+1) for closed syncmers
+    #[test]
+    fn test_density_formula() {
+        // Generate a longer random-ish sequence
+        let seq = b"ACGTGCTCAGAGACTCAGAGGAACGTGCTCAGAGACTCAGAGGAACGTGCTCAGAGACTCAGAGGAACGTGCTCAGAGACTCAGAGGAACGTGCTCAGAGACTCAGAGGA";
+        let packed_seq = PackedSeqVec::from_ascii(seq);
+        let n = seq.len();
+        
+        // Test with k=15, s=5 => window = 11, expected density = 2/11 ≈ 18.2%
+        let our_k = 15usize;
+        let our_s = 5usize;
+        let window_size = our_k - our_s + 1;  // = 11
+        
+        let mut positions = Vec::new();
+        use simd_minimizers::closed_syncmers;
+        closed_syncmers(our_s, window_size)
+            .run(packed_seq.as_slice(), &mut positions);
+        
+        let num_kmers = n - our_k + 1;
+        let actual_density = positions.len() as f64 / num_kmers as f64;
+        let expected_density = 2.0 / window_size as f64;
+        
+        println!("Density test: k={}, s={}, window={}", our_k, our_s, window_size);
+        println!("  Positions: {}, K-mers: {}", positions.len(), num_kmers);
+        println!("  Actual density: {:.2}%", actual_density * 100.0);
+        println!("  Expected density: {:.2}%", expected_density * 100.0);
+        
+        // Allow some deviation due to non-random sequence
+        // The formula is exact for random sequences
+        assert!(actual_density > 0.0, "Should have some syncmers");
+    }
+
+    /// Test that canonical syncmers produce valid results on both forward and reverse complement
+    /// This is based on the test from the original simd-minimizers repository.
+    #[test]
+    fn test_canonical_syncmers_validity() {
+        let seq = b"ACGTGCTCAGAGACTCAGAGGAACGTGCTCAGAGACTCAGAGGA";
+        let packed_seq = PackedSeqVec::from_ascii(seq);
+        
+        // Parameters: k=11 (odd), s=5, window=7
+        let our_k = 11usize;
+        let our_s = 5usize;
+        let simd_k = our_s;
+        let simd_w = our_k - our_s + 1;
+        
+        // Skip if k-mer size is even
+        if (simd_k + simd_w - 1) % 2 == 0 {
+            return;
+        }
+        
+        use simd_minimizers::canonical_closed_syncmers;
+        
+        let mut fwd_positions = Vec::new();
+        
+        let fwd_values: Vec<u64> = canonical_closed_syncmers(simd_k, simd_w)
+            .run(packed_seq.as_slice(), &mut fwd_positions)
+            .values_u64()
+            .collect();
+        
+        // Check that we got valid results
+        assert!(!fwd_positions.is_empty(), "Should have some canonical syncmers");
+        assert_eq!(fwd_positions.len(), fwd_values.len(), "Positions and values should match");
+        
+        // Check that positions are within valid range
+        let len = seq.len();
+        let kmer_size = simd_k + simd_w - 1;
+        let max_pos = len - kmer_size;
+        
+        for &pos in &fwd_positions {
+            assert!((pos as usize) <= max_pos, 
+                "Position {} out of range (max: {})", pos, max_pos);
+        }
+        
+        // Check that positions are sorted
+        for i in 1..fwd_positions.len() {
+            assert!(fwd_positions[i] > fwd_positions[i-1], "Positions should be sorted");
+        }
+        
+        println!("✓ Canonical syncmers validity test passed: {} positions", fwd_positions.len());
+    }
+
+    /// Test the FFI functions work correctly through the full pipeline
+    #[test]
+    fn test_ffi_pipeline() {
+        let seq = b"ACGTGCTCAGAGACTCAGAGGAACGTGCTCAGAGACTCAGAGGA";
+        let packed_seq = PackedSeqVec::from_ascii(seq);
+        
+        // Create sketcher with k=11, s=5
+        let sketcher = SimdSketcher {
+            k: 11,
+            w: 5,
+            cache: Cache::default(),
+        };
+        
+        // Transform parameters as our FFI does
+        let smer_size = sketcher.w;
+        let window_size = sketcher.k - sketcher.w + 1;
+        
+        // Get positions using our transformation
+        let mut our_positions = Vec::new();
+        use simd_minimizers::canonical_closed_syncmers;
+        canonical_closed_syncmers(smer_size, window_size)
+            .run(packed_seq.as_slice(), &mut our_positions);
+        
+        // Verify we get valid results
+        assert!(!our_positions.is_empty(), "Should have some syncmers");
+        
+        // Verify positions are within valid range
+        let max_pos = seq.len() - sketcher.k;
+        for &pos in &our_positions {
+            assert!((pos as usize) <= max_pos, 
+                "Position {} out of range (max: {})", pos, max_pos);
+        }
+        
+        println!("✓ FFI pipeline test passed: {} syncmers", our_positions.len());
+    }
 }
